@@ -1,18 +1,20 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, AlertTriangle, CheckCircle2, HelpCircle, TrendingUp, Clock, MessageSquare, Zap, ExternalLink, Copy, Youtube } from "lucide-react";
+import { Search, AlertTriangle, CheckCircle2, HelpCircle, TrendingUp, Clock, MessageSquare, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Youtube } from "lucide-react";
 
 type AnalysisState = "idle" | "fetching" | "analyzing" | "complete" | "error";
 
 interface Claim {
   id: string;
   timestamp: string;
+  offsetMs: number;
   text: string;
   type: "claim" | "opinion";
   rating: "supported" | "unsupported" | "uncertain";
@@ -27,108 +29,12 @@ interface FramingTactic {
 }
 
 interface AnalysisResult {
-  videoTitle: string;
-  channelName: string;
-  duration: string;
   capScore: number;
+  capScoreExplanation: string;
   summary: string;
   claims: Claim[];
   framingTactics: FramingTactic[];
-  transcript: string;
 }
-
-const mockAnalysisResult: AnalysisResult = {
-  videoTitle: "Why Everything You Know About Diet Is Wrong",
-  channelName: "Health Explained",
-  duration: "14:32",
-  capScore: 67,
-  summary: "This video makes several bold claims about nutrition science, mixing legitimate research findings with exaggerated conclusions. The presenter uses emotional appeals and cherry-picked studies to support a narrative that contradicts mainstream scientific consensus on several points. While some claims about processed foods have merit, the overall framing is designed to provoke rather than inform.",
-  claims: [
-    {
-      id: "1",
-      timestamp: "0:45",
-      text: "Sugar is more addictive than cocaine according to brain imaging studies.",
-      type: "claim",
-      rating: "unsupported",
-      explanation: "This claim misrepresents a single rat study. Human addiction research does not support this comparison."
-    },
-    {
-      id: "2", 
-      timestamp: "2:15",
-      text: "The food industry has spent billions lobbying against nutrition education.",
-      type: "claim",
-      rating: "supported",
-      explanation: "Public lobbying records confirm significant industry spending on food policy influence."
-    },
-    {
-      id: "3",
-      timestamp: "4:30",
-      text: "Doctors receive almost no nutrition training in medical school.",
-      type: "claim",
-      rating: "supported",
-      explanation: "Multiple surveys confirm average nutrition education is under 20 hours in US medical schools."
-    },
-    {
-      id: "4",
-      timestamp: "6:12",
-      text: "This one simple change could add 10 years to your life.",
-      type: "opinion",
-      rating: "unsupported",
-      explanation: "Lifestyle impact claims this specific are not supported by longitudinal research."
-    },
-    {
-      id: "5",
-      timestamp: "8:45",
-      text: "Processed foods are designed to override your satiety signals.",
-      type: "claim",
-      rating: "supported",
-      explanation: "Food science research confirms hyper-palatability engineering in processed foods."
-    },
-    {
-      id: "6",
-      timestamp: "11:20",
-      text: "The government dietary guidelines are influenced by corporate interests.",
-      type: "claim",
-      rating: "uncertain",
-      explanation: "While conflicts of interest exist, the degree of influence is debated among researchers."
-    }
-  ],
-  framingTactics: [
-    {
-      name: "Appeal to Fear",
-      count: 8,
-      severity: "high",
-      examples: ["Your body is being poisoned daily", "The truth they don't want you to know"]
-    },
-    {
-      name: "False Dichotomy",
-      count: 4,
-      severity: "medium",
-      examples: ["You either eat clean or you're killing yourself slowly"]
-    },
-    {
-      name: "Cherry-Picked Evidence",
-      count: 6,
-      severity: "high",
-      examples: ["Studies that contradict main claims are ignored while supporting ones are emphasized"]
-    },
-    {
-      name: "Emotional Language",
-      count: 12,
-      severity: "medium",
-      examples: ["Terrifying", "Shocking truth", "Life-changing secret"]
-    }
-  ],
-  transcript: `[0:00] Hey everyone, welcome back to the channel...
-[0:15] Today we're going to expose the truth about what you're really eating...
-[0:45] Sugar is more addictive than cocaine according to brain imaging studies...
-[2:15] The food industry has spent billions lobbying against nutrition education...
-[4:30] Doctors receive almost no nutrition training in medical school...
-[6:12] This one simple change could add 10 years to your life...
-[8:45] Processed foods are designed to override your satiety signals...
-[11:20] The government dietary guidelines are influenced by corporate interests...
-[14:00] Thanks for watching, don't forget to like and subscribe...`
-};
 
 function extractVideoId(url: string): string | null {
   const patterns = [
@@ -234,12 +140,12 @@ function ClaimCard({ claim, index }: { claim: Claim; index: number }) {
         <div className="mt-1">{getRatingIcon()}</div>
         <div className="flex-1 space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
-            <button 
-              className="text-xs font-mono text-primary hover:underline cursor-pointer"
+            <span 
+              className="text-xs font-mono text-primary"
               data-testid={`claim-timestamp-${claim.id}`}
             >
               {claim.timestamp}
-            </button>
+            </span>
             {getRatingBadge()}
             <Badge variant="outline" className="text-xs">
               {claim.type === "claim" ? "Factual Claim" : "Opinion"}
@@ -294,58 +200,103 @@ export default function Home() {
   const [progressMessage, setProgressMessage] = useState("");
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [showFallback, setShowFallback] = useState(false);
+  const [fallbackError, setFallbackError] = useState("");
   const [manualTranscript, setManualTranscript] = useState("");
   const [activeTab, setActiveTab] = useState("summary");
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const simulateAnalysis = async () => {
+  const runAnalysis = async (useManualTranscript = false) => {
     const videoId = extractVideoId(url);
-    if (!videoId) {
+    if (!videoId && !useManualTranscript) {
+      setErrorMessage("Please enter a valid YouTube URL");
       setState("error");
       return;
     }
 
     setState("fetching");
-    setProgress(0);
-    setProgressMessage("Fetching video transcript...");
-    
-    await new Promise(r => setTimeout(r, 1500));
-    setProgress(25);
-    setProgressMessage("Parsing captions...");
-    
-    await new Promise(r => setTimeout(r, 1000));
-    setProgress(40);
-    
-    const transcriptFailed = Math.random() > 0.7;
-    
-    if (transcriptFailed && !manualTranscript) {
-      setShowFallback(true);
-      setState("idle");
-      setProgress(0);
-      return;
-    }
+    setProgress(10);
+    setProgressMessage("Connecting to server...");
+    setErrorMessage("");
 
-    setState("analyzing");
-    setProgressMessage("Identifying claims and opinions...");
-    setProgress(50);
-    
-    await new Promise(r => setTimeout(r, 1200));
-    setProgressMessage("Fact-checking claims...");
-    setProgress(65);
-    
-    await new Promise(r => setTimeout(r, 1500));
-    setProgressMessage("Detecting framing tactics...");
-    setProgress(80);
-    
-    await new Promise(r => setTimeout(r, 1000));
-    setProgressMessage("Calculating cap score...");
-    setProgress(95);
-    
-    await new Promise(r => setTimeout(r, 800));
-    setProgress(100);
-    
-    setResult(mockAnalysisResult);
-    setState("complete");
-    setActiveTab("summary");
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: url.trim(),
+          videoId,
+          manualTranscript: useManualTranscript ? manualTranscript : undefined
+        })
+      });
+
+      if (!response.ok && !response.headers.get("content-type")?.includes("text/event-stream")) {
+        const error = await response.json();
+        throw new Error(error.message || "Analysis failed");
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              
+              switch (data.type) {
+                case "progress":
+                  setProgressMessage(data.message);
+                  if (data.message.includes("Fetching")) {
+                    setProgress(25);
+                  } else if (data.message.includes("Analyzing") || data.message.includes("Identifying")) {
+                    setState("analyzing");
+                    setProgress(50);
+                  } else if (data.message.includes("fetched")) {
+                    setProgress(40);
+                  }
+                  break;
+
+                case "transcript_failed":
+                  setShowFallback(true);
+                  setFallbackError(data.message);
+                  setState("idle");
+                  setProgress(0);
+                  return;
+
+                case "complete":
+                  setProgress(100);
+                  setResult(data.analysis);
+                  setState("complete");
+                  setActiveTab("summary");
+                  break;
+
+                case "error":
+                  throw new Error(data.message);
+
+                case "done":
+                  break;
+              }
+            } catch (parseError) {
+              console.warn("Failed to parse SSE data:", line);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Analysis error:", error);
+      setErrorMessage(error instanceof Error ? error.message : "Analysis failed");
+      setState("error");
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -353,12 +304,13 @@ export default function Home() {
     if (!url.trim()) return;
     setShowFallback(false);
     setManualTranscript("");
-    simulateAnalysis();
+    setFallbackError("");
+    runAnalysis(false);
   };
 
   const handleFallbackSubmit = () => {
     if (!manualTranscript.trim()) return;
-    simulateAnalysis();
+    runAnalysis(true);
   };
 
   const resetAnalysis = () => {
@@ -368,6 +320,8 @@ export default function Home() {
     setProgress(0);
     setShowFallback(false);
     setManualTranscript("");
+    setErrorMessage("");
+    setFallbackError("");
   };
 
   return (
@@ -389,7 +343,7 @@ export default function Home() {
 
         <main className="max-w-5xl mx-auto px-4 py-8">
           <AnimatePresence mode="wait">
-            {state === "idle" && !result && (
+            {(state === "idle" || state === "error") && !result && (
               <motion.div
                 key="input"
                 initial={{ opacity: 0, y: 20 }}
@@ -430,6 +384,24 @@ export default function Home() {
                   </div>
                 </form>
 
+                {state === "error" && errorMessage && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="max-w-2xl mx-auto"
+                  >
+                    <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5" />
+                        <div>
+                          <p className="text-red-400 font-medium">Analysis failed</p>
+                          <p className="text-sm text-muted-foreground mt-1">{errorMessage}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
                 {showFallback && (
                   <motion.div
                     initial={{ opacity: 0, height: 0 }}
@@ -442,7 +414,7 @@ export default function Home() {
                         <div>
                           <p className="text-amber-400 font-medium">Transcript unavailable</p>
                           <p className="text-sm text-muted-foreground mt-1">
-                            This video doesn't have accessible captions. Please paste the transcript manually below.
+                            {fallbackError || "This video doesn't have accessible captions. Please paste the transcript manually below."}
                           </p>
                         </div>
                       </div>
@@ -464,23 +436,25 @@ export default function Home() {
                   </motion.div>
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-3xl mx-auto pt-8">
-                  <div className="p-4 bg-card border border-card-border rounded-lg text-center">
-                    <MessageSquare className="w-8 h-8 text-primary mx-auto mb-2" />
-                    <h3 className="font-semibold">Claim Detection</h3>
-                    <p className="text-sm text-muted-foreground">Separates facts from opinions</p>
+                {!showFallback && state !== "error" && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-3xl mx-auto pt-8">
+                    <div className="p-4 bg-card border border-card-border rounded-lg text-center">
+                      <MessageSquare className="w-8 h-8 text-primary mx-auto mb-2" />
+                      <h3 className="font-semibold">Claim Detection</h3>
+                      <p className="text-sm text-muted-foreground">Separates facts from opinions</p>
+                    </div>
+                    <div className="p-4 bg-card border border-card-border rounded-lg text-center">
+                      <TrendingUp className="w-8 h-8 text-primary mx-auto mb-2" />
+                      <h3 className="font-semibold">Cap Score</h3>
+                      <p className="text-sm text-muted-foreground">Overall reliability rating</p>
+                    </div>
+                    <div className="p-4 bg-card border border-card-border rounded-lg text-center">
+                      <AlertTriangle className="w-8 h-8 text-primary mx-auto mb-2" />
+                      <h3 className="font-semibold">Framing Analysis</h3>
+                      <p className="text-sm text-muted-foreground">Detects manipulation tactics</p>
+                    </div>
                   </div>
-                  <div className="p-4 bg-card border border-card-border rounded-lg text-center">
-                    <TrendingUp className="w-8 h-8 text-primary mx-auto mb-2" />
-                    <h3 className="font-semibold">Cap Score</h3>
-                    <p className="text-sm text-muted-foreground">Overall reliability rating</p>
-                  </div>
-                  <div className="p-4 bg-card border border-card-border rounded-lg text-center">
-                    <AlertTriangle className="w-8 h-8 text-primary mx-auto mb-2" />
-                    <h3 className="font-semibold">Framing Analysis</h3>
-                    <p className="text-sm text-muted-foreground">Detects manipulation tactics</p>
-                  </div>
-                </div>
+                )}
               </motion.div>
             )}
 
@@ -517,15 +491,10 @@ export default function Home() {
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <h2 className="text-2xl font-bold">{result.videoTitle}</h2>
-                    <div className="flex items-center gap-3 text-muted-foreground text-sm mt-1">
-                      <span>{result.channelName}</span>
-                      <span>•</span>
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-4 h-4" />
-                        {result.duration}
-                      </span>
-                    </div>
+                    <h2 className="text-2xl font-bold">Analysis Complete</h2>
+                    <p className="text-muted-foreground text-sm mt-1">
+                      {result.claims.length} claims analyzed • Cap Score: {result.capScore}/100
+                    </p>
                   </div>
                   <Button variant="outline" onClick={resetAnalysis} data-testid="button-new-analysis">
                     New Analysis
@@ -581,9 +550,15 @@ export default function Home() {
 
                   <TabsContent value="claims" className="mt-6">
                     <div className="space-y-3">
-                      {result.claims.map((claim, index) => (
-                        <ClaimCard key={claim.id} claim={claim} index={index} />
-                      ))}
+                      {result.claims.length > 0 ? (
+                        result.claims.map((claim, index) => (
+                          <ClaimCard key={claim.id} claim={claim} index={index} />
+                        ))
+                      ) : (
+                        <div className="p-8 text-center text-muted-foreground">
+                          No specific claims were identified in this content.
+                        </div>
+                      )}
                     </div>
                   </TabsContent>
 
@@ -593,28 +568,27 @@ export default function Home() {
                         <CapScoreGauge score={result.capScore} />
                       </div>
                       <div className="p-6 bg-card border border-card-border rounded-lg space-y-4">
-                        <h3 className="text-lg font-semibold">What affects the Cap Score?</h3>
+                        <h3 className="text-lg font-semibold">Score Explanation</h3>
+                        <p className="text-muted-foreground">{result.capScoreExplanation}</p>
+                        <div className="h-px bg-border my-4" />
                         <div className="space-y-3">
                           <div className="flex items-center justify-between">
                             <span className="text-muted-foreground">Unsupported claims</span>
-                            <span className="font-mono text-red-400">+25 pts</span>
+                            <span className="font-mono text-red-400">
+                              {result.claims.filter(c => c.rating === "unsupported").length}
+                            </span>
                           </div>
                           <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Fear-based framing</span>
-                            <span className="font-mono text-red-400">+18 pts</span>
+                            <span className="text-muted-foreground">Framing tactics detected</span>
+                            <span className="font-mono text-amber-400">
+                              {result.framingTactics.reduce((sum, t) => sum + t.count, 0)}
+                            </span>
                           </div>
                           <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Emotional language</span>
-                            <span className="font-mono text-amber-400">+12 pts</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Cherry-picked evidence</span>
-                            <span className="font-mono text-red-400">+12 pts</span>
-                          </div>
-                          <div className="h-px bg-border my-2" />
-                          <div className="flex items-center justify-between font-semibold">
-                            <span>Total Cap Score</span>
-                            <span className="font-mono text-primary">{result.capScore}/100</span>
+                            <span className="text-muted-foreground">High severity tactics</span>
+                            <span className="font-mono text-red-400">
+                              {result.framingTactics.filter(t => t.severity === "high").length}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -622,11 +596,17 @@ export default function Home() {
                   </TabsContent>
 
                   <TabsContent value="framing" className="mt-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {result.framingTactics.map((tactic, index) => (
-                        <FramingCard key={tactic.name} tactic={tactic} index={index} />
-                      ))}
-                    </div>
+                    {result.framingTactics.length > 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {result.framingTactics.map((tactic, index) => (
+                          <FramingCard key={tactic.name} tactic={tactic} index={index} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="p-8 bg-card border border-card-border rounded-lg text-center text-muted-foreground">
+                        No significant framing tactics were detected in this content.
+                      </div>
+                    )}
                   </TabsContent>
                 </Tabs>
               </motion.div>
