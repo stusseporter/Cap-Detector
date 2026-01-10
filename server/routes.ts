@@ -5,7 +5,6 @@ import { analyzeTranscript, type AnalysisResult } from "./services/analysis";
 
 interface AnalyzeRequest {
   url?: string;
-  videoId?: string;
   manualTranscript?: string;
 }
 
@@ -16,25 +15,22 @@ export async function registerRoutes(
 
   app.post("/api/analyze", async (req: Request, res: Response) => {
     try {
-      const { url, videoId: providedVideoId, manualTranscript } = req.body as AnalyzeRequest;
+      const { url, manualTranscript } = req.body as AnalyzeRequest;
 
-      let videoId: string | undefined = providedVideoId;
+      let videoId: string | null = null;
       
-      if (url && !videoId) {
-        const extractedId = extractVideoId(url);
-        if (!extractedId) {
-          return res.status(400).json({ 
-            error: "Invalid YouTube URL",
-            message: "Could not extract video ID from the provided URL"
-          });
-        }
-        videoId = extractedId;
+      if (url) {
+        videoId = extractVideoId(url);
+      }
+
+      if (videoId && !/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+        videoId = null;
       }
 
       if (!videoId && !manualTranscript) {
         return res.status(400).json({
-          error: "Missing input",
-          message: "Please provide a YouTube URL or manual transcript"
+          error: "Invalid YouTube URL",
+          message: "Could not extract video ID. Supported formats: youtube.com/watch?v=..., youtu.be/..., youtube.com/shorts/..., youtube.com/embed/..."
         });
       }
 

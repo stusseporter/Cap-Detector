@@ -220,13 +220,6 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState("");
 
   const runAnalysis = async (useManualTranscript = false) => {
-    const videoId = extractVideoId(url);
-    if (!videoId && !useManualTranscript) {
-      setErrorMessage("Please enter a valid YouTube URL");
-      setState("error");
-      return;
-    }
-
     setState("fetching");
     setProgress(10);
     setProgressMessage("Connecting to server...");
@@ -238,7 +231,6 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           url: url.trim(),
-          videoId,
           manualTranscript: useManualTranscript ? manualTranscript : undefined
         })
       });
