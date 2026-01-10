@@ -262,12 +262,22 @@ export default function Home() {
               switch (data.type) {
                 case "progress":
                   setProgressMessage(data.message);
-                  if (data.message.includes("Fetching")) {
+                  if (data.message.includes("Fetching captions")) {
+                    setProgress(15);
+                  } else if (data.message.includes("No captions found")) {
+                    setProgress(20);
+                  } else if (data.message.includes("Checking video duration")) {
                     setProgress(25);
+                  } else if (data.message.includes("Downloading audio")) {
+                    setProgress(35);
+                  } else if (data.message.includes("Transcribing")) {
+                    setProgress(50);
+                  } else if (data.message.includes("transcription complete") || data.message.includes("fetched successfully")) {
+                    setProgress(60);
                   } else if (data.message.includes("Analyzing") || data.message.includes("Identifying")) {
                     setState("analyzing");
-                    setProgress(50);
-                  } else if (data.message.includes("fetched")) {
+                    setProgress(75);
+                  } else if (data.message.includes("cached")) {
                     setProgress(40);
                   }
                   break;

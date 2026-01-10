@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { extractVideoId, fetchTranscript, formatTimestamp } from "./services/youtube";
 import { analyzeTranscript, type AnalysisResult } from "./services/analysis";
+import { transcribeFromYouTube, getVideoMetadata, getCachedTranscript, cacheTranscript } from "./services/transcription";
 
 interface AnalyzeRequest {
   url?: string;
@@ -45,27 +46,59 @@ export async function registerRoutes(
 
       let transcriptText: string;
       let transcriptSegments: { text: string; offset: number; duration: number }[] | null = null;
+      let transcriptSource: 'captions' | 'asr' | 'manual' = 'captions';
 
       if (manualTranscript) {
         sendEvent("progress", { message: "Using provided transcript..." });
         transcriptText = manualTranscript;
+        transcriptSource = 'manual';
       } else {
-        sendEvent("progress", { message: "Fetching video transcript..." });
-        
-        const transcriptResult = await fetchTranscript(videoId!);
-        
-        if (!transcriptResult.success) {
-          sendEvent("transcript_failed", { 
-            message: transcriptResult.error,
-            requireManual: true
-          });
-          res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
-          return res.end();
+        const cachedTranscript = getCachedTranscript(videoId!);
+        if (cachedTranscript) {
+          sendEvent("progress", { message: "Using cached transcript..." });
+          transcriptText = cachedTranscript;
+          transcriptSource = 'asr';
+        } else {
+          sendEvent("progress", { message: "Fetching captions..." });
+          
+          const transcriptResult = await fetchTranscript(videoId!);
+          
+          if (transcriptResult.success && transcriptResult.fullText) {
+            transcriptText = transcriptResult.fullText;
+            transcriptSegments = transcriptResult.transcript!;
+            transcriptSource = 'captions';
+            sendEvent("progress", { message: "Captions fetched successfully" });
+          } else {
+            sendEvent("progress", { message: "No captions found — generating transcript from audio..." });
+            
+            const asrResult = await transcribeFromYouTube(videoId!, (message) => {
+              sendEvent("progress", { message });
+            });
+            
+            if (asrResult.success && asrResult.transcript) {
+              transcriptText = asrResult.transcript;
+              transcriptSource = 'asr';
+              sendEvent("progress", { message: "Audio transcription complete" });
+            } else if (asrResult.tooLong) {
+              sendEvent("transcript_failed", { 
+                message: asrResult.error,
+                requireManual: true,
+                tooLong: true,
+                durationSeconds: asrResult.durationSeconds
+              });
+              res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+              return res.end();
+            } else {
+              const errorDetail = asrResult.error ? asrResult.error : 'Unknown error occurred during audio transcription.';
+              sendEvent("transcript_failed", { 
+                message: `Automatic transcription failed: ${errorDetail} Please paste the transcript manually.`,
+                requireManual: true
+              });
+              res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+              return res.end();
+            }
+          }
         }
-
-        transcriptText = transcriptResult.fullText!;
-        transcriptSegments = transcriptResult.transcript!;
-        sendEvent("progress", { message: "Transcript fetched successfully" });
       }
 
       sendEvent("progress", { message: "Analyzing content..." });
@@ -78,7 +111,8 @@ export async function registerRoutes(
       sendEvent("complete", {
         videoId,
         analysis,
-        transcriptLength: transcriptText.length
+        transcriptLength: transcriptText.length,
+        transcriptSource
       });
 
       res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
