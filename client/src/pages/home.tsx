@@ -36,44 +36,31 @@ interface AnalysisResult {
   framingTactics: FramingTactic[];
 }
 
-function extractVideoId(url: string): string | null {
-  const trimmed = url.trim();
-  
-  if (/^[A-Za-z0-9_-]{11}$/.test(trimmed)) {
-    return trimmed;
-  }
-
+function extractVideoId(input: string): string | null {
   try {
-    const parsed = new URL(trimmed);
-    const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
-    const pathname = parsed.pathname;
-    
-    let videoId: string | null = null;
+    const url = new URL(input.trim());
+    const host = url.hostname.replace("www.", "");
 
-    if (hostname === 'youtu.be') {
-      const segment = pathname.split('/')[1];
-      if (segment) {
-        videoId = segment.split('?')[0];
-      }
-    } else if (hostname === 'youtube.com' || hostname === 'm.youtube.com') {
-      if (pathname.startsWith('/shorts/')) {
-        videoId = pathname.split('/shorts/')[1]?.split(/[?/]/)[0] || null;
-      } else if (pathname.startsWith('/embed/')) {
-        videoId = pathname.split('/embed/')[1]?.split(/[?/]/)[0] || null;
-      } else if (pathname.startsWith('/v/')) {
-        videoId = pathname.split('/v/')[1]?.split(/[?/]/)[0] || null;
-      } else if (pathname === '/watch' || pathname.startsWith('/watch')) {
-        videoId = parsed.searchParams.get('v');
-      }
+    if (host === "youtu.be") {
+      return url.pathname.split("/")[1] || null;
     }
 
-    if (videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)) {
-      return videoId;
+    if (url.searchParams.has("v")) {
+      return url.searchParams.get("v");
     }
+
+    if (url.pathname.startsWith("/shorts/")) {
+      return url.pathname.split("/")[2] || null;
+    }
+
+    if (url.pathname.startsWith("/embed/")) {
+      return url.pathname.split("/")[2] || null;
+    }
+
+    return null;
   } catch {
+    return null;
   }
-
-  return null;
 }
 
 function CapScoreGauge({ score }: { score: number }) {
