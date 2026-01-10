@@ -1,0 +1,46 @@
+Upgrade Cap Detector so users NEVER have to paste a transcript manually.
+
+Current issue:
+The app only tries to fetch YouTube captions. When captions are unavailable it stops and asks for manual transcript. This kills the product.
+
+Required fix (MVP):
+Implement an automatic fallback pipeline:
+
+FLOW
+1) User inputs any YouTube URL
+2) Extract videoId (already works)
+3) Attempt transcript via captions API (keep this)
+4) If captions/transcript unavailable -> AUTO transcribe from audio (no user action):
+   4a) Server-side: fetch audio-only stream for the YouTube videoId
+   4b) Convert audio to a supported format if needed (mp3 or wav)
+   4c) Send audio to OpenAI Whisper API (or other STT) to generate transcript
+5) Then run the Cap analysis LLM on the generated transcript
+6) Return results to UI
+
+UX REQUIREMENTS
+- If captions missing, show: “No captions found — generating transcript from audio…”
+- Show progress steps: “Fetching captions…” -> “Downloading audio…” -> “Transcribing…” -> “Analyzing…”
+- Do NOT show the manual transcript textbox unless BOTH captions and ASR fail
+
+GUARDS (IMPORTANT)
+- Enforce max duration for MVP (e.g., 12 minutes) using YouTube metadata.
+- If longer than limit, show: “Video too long for MVP. Please use a shorter clip or paste transcript.”
+- Cache transcripts by videoId for 24 hours to reduce cost + speed up repeat runs.
+
+IMPLEMENTATION NOTES (Node/Next)
+- Add backend route: POST /api/analyze { url }
+- Inside route:
+  - videoId = extractYouTubeVideoId(url)
+  - transcript = tryGetCaptions(videoId)
+  - if !transcript: transcript = transcribeFromYouTubeAudio(videoId)
+  - analysis = runCapAnalysis(transcript)
+  - return { videoId, transcriptSource: "captions"|"asr", transcript, analysis }
+
+For transcribeFromYouTubeAudio:
+- Use ytdl-core (audioonly) to get the audio stream from YouTube
+- Pipe to a temp file in /tmp
+- Send the file to Whisper API
+- Clean up temp file after
+
+Deliverable:
+Working end-to-end: paste YouTube URL -> automatic transcript (captions OR ASR) -> cap/fact analysis output. No manual transcript input in normal cases.
