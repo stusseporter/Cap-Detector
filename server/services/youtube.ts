@@ -14,15 +14,42 @@ export interface TranscriptResult {
 }
 
 export function extractVideoId(url: string): string | null {
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([^&\n?#]+)/,
-    /^([a-zA-Z0-9_-]{11})$/
-  ];
+  const trimmed = url.trim();
   
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1];
+  if (/^[A-Za-z0-9_-]{11}$/.test(trimmed)) {
+    return trimmed;
   }
+
+  try {
+    const parsed = new URL(trimmed);
+    const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    const pathname = parsed.pathname;
+    
+    let videoId: string | null = null;
+
+    if (hostname === 'youtu.be') {
+      const segment = pathname.split('/')[1];
+      if (segment) {
+        videoId = segment.split('?')[0];
+      }
+    } else if (hostname === 'youtube.com' || hostname === 'm.youtube.com') {
+      if (pathname.startsWith('/shorts/')) {
+        videoId = pathname.split('/shorts/')[1]?.split(/[?/]/)[0] || null;
+      } else if (pathname.startsWith('/embed/')) {
+        videoId = pathname.split('/embed/')[1]?.split(/[?/]/)[0] || null;
+      } else if (pathname.startsWith('/v/')) {
+        videoId = pathname.split('/v/')[1]?.split(/[?/]/)[0] || null;
+      } else if (pathname === '/watch' || pathname.startsWith('/watch')) {
+        videoId = parsed.searchParams.get('v');
+      }
+    }
+
+    if (videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+      return videoId;
+    }
+  } catch {
+  }
+
   return null;
 }
 
