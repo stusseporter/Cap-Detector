@@ -1,0 +1,115 @@
+=== CONTENT INGESTION LAYER ===
+Build a unified ContentIngestionService that accepts any 
+input type and returns { text, title, source, contentType }
+
+Install: supadata (or use fetch directly), 
+         cheerio, @mozilla/readability, 
+         node-fetch
+
+1. YOUTUBE VIDEOS
+   Detection: URL contains youtube.com or youtu.be
+   
+   URL parser — handle ALL formats:
+   - youtube.com/watch?v={id}
+   - youtu.be/{id}
+   - youtube.com/shorts/{id}
+   - youtube.com/watch?v={id}&t=30s
+   - m.youtube.com/watch?v={id}
+   
+   Extract video ID with regex:
+   /(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)
+    ([a-zA-Z0-9_-]{11})/
+   
+   Fetch transcript via Supadata API:
+   GET https://api.supadata.ai/v1/youtube/transcript
+     ?url=https://youtube.com/watch?v={videoId}
+   Headers: { 'x-api-key': process.env.SUPADATA_API_KEY }
+   
+   Also fetch video metadata via YouTube oEmbed 
+   (no API key needed):
+   GET https://www.youtube.com/oembed
+     ?url={videoUrl}&format=json
+   Returns: title, author_name, thumbnail_url
+   
+   Error handling:
+   - No transcript available → return specific error:
+     "This video doesn't have captions. 
+      Try pasting the transcript manually."
+   - Video private/deleted → "Video not accessible"
+   - Invalid URL → "Not a valid YouTube URL"
+
+2. ARTICLE / BLOG / SUBSTACK URLs
+   Detection: any URL that isn't YouTube/social media
+   
+   Fetch page HTML with node-fetch
+   Use @mozilla/readability to extract clean article text:
+     const { Readability } = require('@mozilla/readability')
+     const { JSDOM } = require('jsdom')
+     const dom = new JSDOM(html, { url: pageUrl })
+     const reader = new Readability(dom.window.document)
+     const article = reader.parse()
+     // article.title, article.textContent
+   
+   Handles: Medium, Substack, news sites, blogs
+   Minimum text threshold: 200 words
+   Error: "Couldn't extract article text. 
+          Try pasting the text manually."
+
+3. TWITTER/X THREADS
+   Detection: URL contains twitter.com or x.com
+   
+   Use Supadata Twitter endpoint:
+   GET https://api.supadata.ai/v1/twitter/thread
+     ?url={tweetUrl}
+   Headers: { 'x-api-key': process.env.SUPADATA_API_KEY }
+   
+   Concatenate all tweets in thread into single text block
+   Include quote tweets if available
+
+4. RAW TEXT PASTE
+   Detection: user selects "Paste text" tab OR 
+              no URL detected in input
+   
+   Simple textarea input, no API calls needed
+   Minimum 100 characters
+   Maximum 50,000 characters (prevents abuse)
+   Label placeholder: "Paste any text — transcript, 
+   article, tweet thread, speech..."
+
+=== INPUT UI ===
+Single input area with 4 tabs:
+  [🎬 YouTube] [📄 Article] [🐦 Twitter] [📋 Paste Text]
+
+YouTube tab: URL input + "Analyze" button
+  - Show video thumbnail preview after valid URL detected
+  - Show channel name and title before they submit
+  - "Fetching transcript..." loading state with progress
+
+Article tab: URL input + "Analyze" button
+  - Show page title preview after valid URL detected
+
+Twitter tab: URL input + "Analyze" button
+
+Paste Text tab: Large textarea + character count + 
+               "Analyze" button
+
+All tabs feed into the same analysis pipeline.
+Show which content type was detected in the results.
+
+=== ERROR MESSAGES (friendly, never technical) ===
+YouTube no captions: 
+  "This video doesn't have auto-captions. 
+   Copy the transcript from YouTube's '...' menu 
+   and paste it in the Text tab."
+   
+Article blocked: 
+  "This site blocked us from reading the article. 
+   Copy and paste the text manually."
+   
+Too short: 
+  "Not enough content to analyze. 
+   We need at least 100 words."
+   
+Network error: 
+  "Couldn't reach that URL. Check it's public 
+   and try again, or paste the text manually."
