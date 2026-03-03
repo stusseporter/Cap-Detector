@@ -1,5 +1,4 @@
 import OpenAI from 'openai';
-import { TranscriptSegment, formatTimestamp } from './youtube';
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -31,31 +30,33 @@ export interface AnalysisResult {
   framingTactics: FramingTactic[];
 }
 
-function buildTranscriptWithTimestamps(segments: TranscriptSegment[]): string {
-  return segments.map(seg => `[${formatTimestamp(seg.offset)}] ${seg.text}`).join('\n');
-}
+const contentTypeLabels: Record<string, string> = {
+  youtube: 'video transcript',
+  article: 'article',
+  twitter: 'tweet thread',
+  text: 'text',
+};
 
-export async function analyzeTranscript(
-  transcript: TranscriptSegment[] | string,
+export async function analyzeContent(
+  text: string,
+  contentType: string,
   onProgress?: (message: string) => void
 ): Promise<AnalysisResult> {
-  const transcriptText = typeof transcript === 'string' 
-    ? transcript 
-    : buildTranscriptWithTimestamps(transcript);
-
   onProgress?.('Identifying claims and opinions...');
 
-  const systemPrompt = `You are an expert fact-checker and media analyst. Your job is to analyze video transcripts for:
+  const label = contentTypeLabels[contentType] || 'content';
+
+  const systemPrompt = `You are an expert fact-checker and media analyst. Your job is to analyze ${label}s for:
 1. Factual claims vs opinions/emotional language
 2. Rhetorical manipulation tactics
 3. Overall credibility
 
 You must respond with valid JSON matching the exact schema provided.`;
 
-  const analysisPrompt = `Analyze this video transcript for factual accuracy and manipulation tactics.
+  const analysisPrompt = `Analyze this ${label} for factual accuracy and manipulation tactics.
 
-TRANSCRIPT:
-${transcriptText}
+CONTENT:
+${text}
 
 Provide a comprehensive analysis in the following JSON format:
 {
@@ -65,7 +66,7 @@ Provide a comprehensive analysis in the following JSON format:
   "claims": [
     {
       "id": "<unique id>",
-      "timestamp": "<timestamp from transcript if available, or 'N/A'>",
+      "timestamp": "<timestamp if available, or 'N/A'>",
       "offsetMs": <milliseconds offset or 0>,
       "text": "<the exact claim made>",
       "type": "<'claim' for factual assertions, 'opinion' for subjective statements>",
@@ -78,7 +79,7 @@ Provide a comprehensive analysis in the following JSON format:
       "name": "<tactic name like 'Appeal to Fear', 'Cherry-Picking', 'False Dichotomy', 'Emotional Language', 'Exaggeration'>",
       "count": <number of times used>,
       "severity": "<'low', 'medium', or 'high' based on manipulation impact>",
-      "examples": ["<quote or paraphrase from transcript>"]
+      "examples": ["<quote or paraphrase from the content>"]
     }
   ]
 }
@@ -86,7 +87,7 @@ Provide a comprehensive analysis in the following JSON format:
 Guidelines:
 - Extract at least 3-5 significant claims if present
 - Identify ALL manipulation tactics used, even subtle ones
-- Be fair but critical - don't assume malice, but note misleading patterns
+- Be fair but critical — don't assume malice, but note misleading patterns
 - Cap score should reflect overall reliability: 0-30=mostly factual, 31-60=mixed/biased, 61-100=highly misleading
 - Include timestamps where they appear in brackets like [1:23]`;
 
@@ -107,21 +108,21 @@ Guidelines:
 
   try {
     const result = JSON.parse(content) as AnalysisResult;
-    
+
     if (!result.claims) result.claims = [];
     if (!result.framingTactics) result.framingTactics = [];
     if (typeof result.capScore !== 'number') result.capScore = 50;
     if (!result.summary) result.summary = 'Analysis completed.';
     if (!result.capScoreExplanation) result.capScoreExplanation = 'Score based on claim accuracy and framing tactics.';
-    
+
     result.claims = result.claims.map((claim, idx) => ({
       ...claim,
       id: claim.id || `claim-${idx + 1}`,
       timestamp: claim.timestamp || 'N/A',
       offsetMs: claim.offsetMs || 0,
       type: claim.type === 'opinion' ? 'opinion' : 'claim',
-      rating: ['supported', 'unsupported', 'uncertain'].includes(claim.rating) 
-        ? claim.rating 
+      rating: ['supported', 'unsupported', 'uncertain'].includes(claim.rating)
+        ? claim.rating
         : 'uncertain'
     }));
 

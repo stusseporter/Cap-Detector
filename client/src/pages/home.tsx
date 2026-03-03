@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, AlertTriangle, CheckCircle2, HelpCircle, TrendingUp, Clock, MessageSquare, Zap } from "lucide-react";
+import { Search, AlertTriangle, CheckCircle2, HelpCircle, TrendingUp, MessageSquare, Zap, Youtube, FileText, Twitter, ClipboardPaste, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Youtube } from "lucide-react";
 
 type AnalysisState = "idle" | "fetching" | "analyzing" | "complete" | "error";
+type ContentType = "youtube" | "article" | "twitter" | "text";
 
 interface Claim {
   id: string;
@@ -36,31 +36,12 @@ interface AnalysisResult {
   framingTactics: FramingTactic[];
 }
 
-function extractVideoId(input: string): string | null {
-  try {
-    const url = new URL(input.trim());
-    const host = url.hostname.replace("www.", "");
-
-    if (host === "youtu.be") {
-      return url.pathname.split("/")[1] || null;
-    }
-
-    if (url.searchParams.has("v")) {
-      return url.searchParams.get("v");
-    }
-
-    if (url.pathname.startsWith("/shorts/")) {
-      return url.pathname.split("/")[2] || null;
-    }
-
-    if (url.pathname.startsWith("/embed/")) {
-      return url.pathname.split("/")[2] || null;
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
+interface ContentMeta {
+  contentType: ContentType;
+  title?: string;
+  source?: string;
+  authorName?: string;
+  thumbnailUrl?: string;
 }
 
 function CapScoreGauge({ score }: { score: number }) {
@@ -69,7 +50,7 @@ function CapScoreGauge({ score }: { score: number }) {
     if (score < 66) return "text-amber-400";
     return "text-red-400";
   };
-  
+
   const getScoreLabel = () => {
     if (score < 33) return "Low Cap";
     if (score < 66) return "Moderate Cap";
@@ -80,22 +61,9 @@ function CapScoreGauge({ score }: { score: number }) {
     <div className="flex flex-col items-center gap-4">
       <div className="relative w-48 h-48">
         <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
-          <circle
-            cx="50"
-            cy="50"
-            r="42"
-            fill="none"
-            stroke="hsl(var(--muted))"
-            strokeWidth="8"
-          />
+          <circle cx="50" cy="50" r="42" fill="none" stroke="hsl(var(--muted))" strokeWidth="8" />
           <motion.circle
-            cx="50"
-            cy="50"
-            r="42"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="8"
-            strokeLinecap="round"
+            cx="50" cy="50" r="42" fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round"
             className={getScoreColor()}
             initial={{ strokeDasharray: "0 264" }}
             animate={{ strokeDasharray: `${(score / 100) * 264} 264` }}
@@ -103,7 +71,7 @@ function CapScoreGauge({ score }: { score: number }) {
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <motion.span 
+          <motion.span
             className={`text-5xl font-bold ${getScoreColor()}`}
             initial={{ opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -134,7 +102,7 @@ function ClaimCard({ claim, index }: { claim: Claim; index: number }) {
       case "uncertain": return <HelpCircle className="w-5 h-5 text-amber-400" />;
     }
   };
-  
+
   const getRatingBadge = () => {
     switch (claim.rating) {
       case "supported": return <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">Supported</Badge>;
@@ -154,10 +122,7 @@ function ClaimCard({ claim, index }: { claim: Claim; index: number }) {
         <div className="mt-1">{getRatingIcon()}</div>
         <div className="flex-1 space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
-            <span 
-              className="text-xs font-mono text-primary"
-              data-testid={`claim-timestamp-${claim.id}`}
-            >
+            <span className="text-xs font-mono text-primary" data-testid={`claim-timestamp-${claim.id}`}>
               {claim.timestamp}
             </span>
             {getRatingBadge()}
@@ -207,31 +172,71 @@ function FramingCard({ tactic, index }: { tactic: FramingTactic; index: number }
   );
 }
 
+const contentTypeLabels: Record<ContentType, string> = {
+  youtube: "YouTube Video",
+  article: "Article",
+  twitter: "Twitter Thread",
+  text: "Pasted Text",
+};
+
+const contentTypeIcons: Record<ContentType, React.ReactNode> = {
+  youtube: <Youtube className="w-4 h-4" />,
+  article: <FileText className="w-4 h-4" />,
+  twitter: <Twitter className="w-4 h-4" />,
+  text: <ClipboardPaste className="w-4 h-4" />,
+};
+
 export default function Home() {
-  const [url, setUrl] = useState("");
+  const [inputTab, setInputTab] = useState<ContentType>("youtube");
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [articleUrl, setArticleUrl] = useState("");
+  const [twitterUrl, setTwitterUrl] = useState("");
+  const [pasteText, setPasteText] = useState("");
   const [state, setState] = useState<AnalysisState>("idle");
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState("");
   const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [showFallback, setShowFallback] = useState(false);
-  const [fallbackError, setFallbackError] = useState("");
-  const [manualTranscript, setManualTranscript] = useState("");
-  const [activeTab, setActiveTab] = useState("summary");
+  const [contentMeta, setContentMeta] = useState<ContentMeta | null>(null);
+  const [activeResultTab, setActiveResultTab] = useState("summary");
   const [errorMessage, setErrorMessage] = useState("");
+  const [contentFailedMessage, setContentFailedMessage] = useState("");
 
-  const runAnalysis = async (useManualTranscript = false) => {
+  const charCount = pasteText.length;
+
+  const getInputValue = (): { url?: string; text?: string } => {
+    switch (inputTab) {
+      case "youtube": return { url: youtubeUrl };
+      case "article": return { url: articleUrl };
+      case "twitter": return { url: twitterUrl };
+      case "text": return { text: pasteText };
+    }
+  };
+
+  const isSubmitDisabled = (): boolean => {
+    switch (inputTab) {
+      case "youtube": return !youtubeUrl.trim();
+      case "article": return !articleUrl.trim();
+      case "twitter": return !twitterUrl.trim();
+      case "text": return !pasteText.trim() || pasteText.trim().length < 100;
+    }
+  };
+
+  const runAnalysis = async () => {
     setState("fetching");
     setProgress(10);
     setProgressMessage("Connecting to server...");
     setErrorMessage("");
+    setContentFailedMessage("");
+
+    const input = getInputValue();
 
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          url: url.trim(),
-          manualTranscript: useManualTranscript ? manualTranscript : undefined
+          ...input,
+          contentType: inputTab,
         })
       });
 
@@ -258,42 +263,40 @@ export default function Home() {
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-              
+
               switch (data.type) {
                 case "progress":
                   setProgressMessage(data.message);
-                  if (data.message.includes("Fetching captions")) {
-                    setProgress(15);
-                  } else if (data.message.includes("No captions found")) {
+                  if (data.message.includes("Fetching") || data.message.includes("Starting")) {
                     setProgress(20);
-                  } else if (data.message.includes("Checking video duration")) {
-                    setProgress(25);
-                  } else if (data.message.includes("Downloading audio")) {
-                    setProgress(35);
-                  } else if (data.message.includes("Transcribing")) {
-                    setProgress(50);
-                  } else if (data.message.includes("transcription complete") || data.message.includes("fetched successfully")) {
+                  } else if (data.message.includes("Extracting") || data.message.includes("transcript")) {
+                    setProgress(40);
+                  } else if (data.message.includes("fetched") || data.message.includes("extracted") || data.message.includes("successfully")) {
                     setProgress(60);
                   } else if (data.message.includes("Analyzing") || data.message.includes("Identifying")) {
                     setState("analyzing");
                     setProgress(75);
-                  } else if (data.message.includes("cached")) {
-                    setProgress(40);
                   }
                   break;
 
-                case "transcript_failed":
-                  setShowFallback(true);
-                  setFallbackError(data.message);
-                  setState("idle");
+                case "content_failed":
+                  setContentFailedMessage(data.message);
+                  setState("error");
                   setProgress(0);
                   return;
 
                 case "complete":
                   setProgress(100);
                   setResult(data.analysis);
+                  setContentMeta({
+                    contentType: data.contentType,
+                    title: data.title,
+                    source: data.source,
+                    authorName: data.authorName,
+                    thumbnailUrl: data.thumbnailUrl,
+                  });
                   setState("complete");
-                  setActiveTab("summary");
+                  setActiveResultTab("summary");
                   break;
 
                 case "error":
@@ -303,7 +306,11 @@ export default function Home() {
                   break;
               }
             } catch (parseError) {
-              console.warn("Failed to parse SSE data:", line);
+              if (parseError instanceof Error && parseError.message !== "Analysis failed") {
+                console.warn("Failed to parse SSE data:", line);
+              } else {
+                throw parseError;
+              }
             }
           }
         }
@@ -317,27 +324,17 @@ export default function Home() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!url.trim()) return;
-    setShowFallback(false);
-    setManualTranscript("");
-    setFallbackError("");
-    runAnalysis(false);
-  };
-
-  const handleFallbackSubmit = () => {
-    if (!manualTranscript.trim()) return;
-    runAnalysis(true);
+    if (isSubmitDisabled()) return;
+    runAnalysis();
   };
 
   const resetAnalysis = () => {
     setState("idle");
     setResult(null);
-    setUrl("");
+    setContentMeta(null);
     setProgress(0);
-    setShowFallback(false);
-    setManualTranscript("");
     setErrorMessage("");
-    setFallbackError("");
+    setContentFailedMessage("");
   };
 
   return (
@@ -351,7 +348,7 @@ export default function Home() {
               </div>
               <div>
                 <h1 className="text-xl font-bold tracking-tight">Cap Detector</h1>
-                <p className="text-xs text-muted-foreground">Fact-check any YouTube video</p>
+                <p className="text-xs text-muted-foreground">Fact-check any content</p>
               </div>
             </div>
           </div>
@@ -373,34 +370,131 @@ export default function Home() {
                     <span className="text-emerald-400">fact</span>?
                   </h2>
                   <p className="text-muted-foreground text-lg max-w-xl mx-auto">
-                    Paste any YouTube URL and we'll analyze the video for factual claims, 
-                    emotional manipulation, and rhetorical tactics.
+                    Paste a YouTube link, article URL, tweet, or any text — we'll analyze it
+                    for factual claims, emotional manipulation, and rhetorical tactics.
                   </p>
                 </div>
 
-                <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
-                  <div className="relative">
-                    <Youtube className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                    <Input
-                      type="text"
-                      placeholder="Paste YouTube URL here..."
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      className="pl-12 pr-32 h-14 text-lg bg-card border-card-border focus:border-primary"
-                      data-testid="input-youtube-url"
-                    />
-                    <Button 
-                      type="submit"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 bg-primary text-primary-foreground hover:bg-primary/90"
-                      data-testid="button-analyze"
-                    >
-                      <Search className="w-4 h-4 mr-2" />
-                      Analyze
-                    </Button>
-                  </div>
-                </form>
+                <div className="max-w-2xl mx-auto">
+                  <Tabs value={inputTab} onValueChange={(v) => { setInputTab(v as ContentType); setContentFailedMessage(""); setErrorMessage(""); }}>
+                    <TabsList className="w-full justify-start bg-card border border-card-border p-1 mb-4">
+                      <TabsTrigger value="youtube" className="flex items-center gap-2" data-testid="tab-youtube">
+                        <Youtube className="w-4 h-4" /> YouTube
+                      </TabsTrigger>
+                      <TabsTrigger value="article" className="flex items-center gap-2" data-testid="tab-article">
+                        <FileText className="w-4 h-4" /> Article
+                      </TabsTrigger>
+                      <TabsTrigger value="twitter" className="flex items-center gap-2" data-testid="tab-twitter">
+                        <Twitter className="w-4 h-4" /> Twitter
+                      </TabsTrigger>
+                      <TabsTrigger value="text" className="flex items-center gap-2" data-testid="tab-text">
+                        <ClipboardPaste className="w-4 h-4" /> Paste Text
+                      </TabsTrigger>
+                    </TabsList>
 
-                {state === "error" && errorMessage && (
+                    <form onSubmit={handleSubmit}>
+                      <TabsContent value="youtube" className="mt-0">
+                        <div className="relative">
+                          <Youtube className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                          <Input
+                            type="text"
+                            placeholder="Paste YouTube URL here..."
+                            value={youtubeUrl}
+                            onChange={(e) => setYoutubeUrl(e.target.value)}
+                            className="pl-12 pr-32 h-14 text-lg bg-card border-card-border focus:border-primary"
+                            data-testid="input-youtube-url"
+                          />
+                          <Button
+                            type="submit"
+                            disabled={!youtubeUrl.trim()}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 bg-primary text-primary-foreground hover:bg-primary/90"
+                            data-testid="button-analyze-youtube"
+                          >
+                            <Search className="w-4 h-4 mr-2" />
+                            Analyze
+                          </Button>
+                        </div>
+                      </TabsContent>
+
+                      <TabsContent value="article" className="mt-0">
+                        <div className="relative">
+                          <ExternalLink className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                          <Input
+                            type="text"
+                            placeholder="Paste article or blog URL here..."
+                            value={articleUrl}
+                            onChange={(e) => setArticleUrl(e.target.value)}
+                            className="pl-12 pr-32 h-14 text-lg bg-card border-card-border focus:border-primary"
+                            data-testid="input-article-url"
+                          />
+                          <Button
+                            type="submit"
+                            disabled={!articleUrl.trim()}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 bg-primary text-primary-foreground hover:bg-primary/90"
+                            data-testid="button-analyze-article"
+                          >
+                            <Search className="w-4 h-4 mr-2" />
+                            Analyze
+                          </Button>
+                        </div>
+                      </TabsContent>
+
+                      <TabsContent value="twitter" className="mt-0">
+                        <div className="relative">
+                          <Twitter className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                          <Input
+                            type="text"
+                            placeholder="Paste Twitter/X URL here..."
+                            value={twitterUrl}
+                            onChange={(e) => setTwitterUrl(e.target.value)}
+                            className="pl-12 pr-32 h-14 text-lg bg-card border-card-border focus:border-primary"
+                            data-testid="input-twitter-url"
+                          />
+                          <Button
+                            type="submit"
+                            disabled={!twitterUrl.trim()}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 bg-primary text-primary-foreground hover:bg-primary/90"
+                            data-testid="button-analyze-twitter"
+                          >
+                            <Search className="w-4 h-4 mr-2" />
+                            Analyze
+                          </Button>
+                        </div>
+                      </TabsContent>
+
+                      <TabsContent value="text" className="mt-0 space-y-3">
+                        <Textarea
+                          placeholder="Paste any text — transcript, article, tweet thread, speech..."
+                          value={pasteText}
+                          onChange={(e) => {
+                            if (e.target.value.length <= 50000) {
+                              setPasteText(e.target.value);
+                            }
+                          }}
+                          className="min-h-[200px] bg-card border-card-border text-base"
+                          data-testid="textarea-paste-text"
+                        />
+                        <div className="flex items-center justify-between">
+                          <span className={`text-xs ${charCount < 100 ? 'text-amber-400' : charCount > 45000 ? 'text-red-400' : 'text-muted-foreground'}`}>
+                            {charCount.toLocaleString()} / 50,000 characters
+                            {charCount > 0 && charCount < 100 && " (minimum 100)"}
+                          </span>
+                          <Button
+                            type="submit"
+                            disabled={!pasteText.trim() || pasteText.trim().length < 100}
+                            className="bg-primary text-primary-foreground hover:bg-primary/90"
+                            data-testid="button-analyze-text"
+                          >
+                            <Search className="w-4 h-4 mr-2" />
+                            Analyze
+                          </Button>
+                        </div>
+                      </TabsContent>
+                    </form>
+                  </Tabs>
+                </div>
+
+                {(state === "error" && (errorMessage || contentFailedMessage)) && (
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -410,49 +504,19 @@ export default function Home() {
                       <div className="flex items-start gap-3">
                         <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5" />
                         <div>
-                          <p className="text-red-400 font-medium">Analysis failed</p>
-                          <p className="text-sm text-muted-foreground mt-1">{errorMessage}</p>
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-
-                {showFallback && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    className="max-w-2xl mx-auto"
-                  >
-                    <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg mb-4">
-                      <div className="flex items-start gap-3">
-                        <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5" />
-                        <div>
-                          <p className="text-amber-400 font-medium">Transcript unavailable</p>
+                          <p className="text-red-400 font-medium">
+                            {contentFailedMessage ? "Content extraction failed" : "Analysis failed"}
+                          </p>
                           <p className="text-sm text-muted-foreground mt-1">
-                            {fallbackError || "This video doesn't have accessible captions. Please paste the transcript manually below."}
+                            {contentFailedMessage || errorMessage}
                           </p>
                         </div>
                       </div>
                     </div>
-                    <Textarea
-                      placeholder="Paste the video transcript here..."
-                      value={manualTranscript}
-                      onChange={(e) => setManualTranscript(e.target.value)}
-                      className="min-h-[200px] bg-card border-card-border"
-                      data-testid="textarea-manual-transcript"
-                    />
-                    <Button 
-                      onClick={handleFallbackSubmit}
-                      className="mt-4 w-full bg-primary text-primary-foreground"
-                      data-testid="button-analyze-transcript"
-                    >
-                      Analyze Transcript
-                    </Button>
                   </motion.div>
                 )}
 
-                {!showFallback && state !== "error" && (
+                {state !== "error" && (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-3xl mx-auto pt-8">
                     <div className="p-4 bg-card border border-card-border rounded-lg text-center">
                       <MessageSquare className="w-8 h-8 text-primary mx-auto mb-2" />
@@ -505,11 +569,18 @@ export default function Home() {
                 animate={{ opacity: 1, y: 0 }}
                 className="space-y-6"
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-4">
                   <div>
-                    <h2 className="text-2xl font-bold">Analysis Complete</h2>
+                    <div className="flex items-center gap-2 mb-1">
+                      {contentMeta && contentTypeIcons[contentMeta.contentType]}
+                      <Badge variant="outline" className="text-xs">
+                        {contentMeta ? contentTypeLabels[contentMeta.contentType] : "Content"}
+                      </Badge>
+                    </div>
+                    <h2 className="text-2xl font-bold">{contentMeta?.title || "Analysis Complete"}</h2>
                     <p className="text-muted-foreground text-sm mt-1">
-                      {result.claims.length} claims analyzed • Cap Score: {result.capScore}/100
+                      {result.claims.length} claims analyzed · Cap Score: {result.capScore}/100
+                      {contentMeta?.authorName && ` · By ${contentMeta.authorName}`}
                     </p>
                   </div>
                   <Button variant="outline" onClick={resetAnalysis} data-testid="button-new-analysis">
@@ -517,7 +588,7 @@ export default function Home() {
                   </Button>
                 </div>
 
-                <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+                <Tabs value={activeResultTab} onValueChange={setActiveResultTab} className="w-full">
                   <TabsList className="w-full justify-start bg-card border border-card-border p-1">
                     <TabsTrigger value="summary" data-testid="tab-summary">Summary</TabsTrigger>
                     <TabsTrigger value="claims" data-testid="tab-claims">
@@ -564,64 +635,41 @@ export default function Home() {
                     </div>
                   </TabsContent>
 
-                  <TabsContent value="claims" className="mt-6">
-                    <div className="space-y-3">
-                      {result.claims.length > 0 ? (
-                        result.claims.map((claim, index) => (
-                          <ClaimCard key={claim.id} claim={claim} index={index} />
-                        ))
-                      ) : (
-                        <div className="p-8 text-center text-muted-foreground">
-                          No specific claims were identified in this content.
-                        </div>
-                      )}
-                    </div>
+                  <TabsContent value="claims" className="mt-6 space-y-4">
+                    {result.claims.length === 0 ? (
+                      <div className="text-center py-12 text-muted-foreground">
+                        <p>No specific claims were identified in this content.</p>
+                      </div>
+                    ) : (
+                      result.claims.map((claim, index) => (
+                        <ClaimCard key={claim.id} claim={claim} index={index} />
+                      ))
+                    )}
                   </TabsContent>
 
                   <TabsContent value="score" className="mt-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="p-8 bg-card border border-card-border rounded-lg flex items-center justify-center">
+                    <div className="p-8 bg-card border border-card-border rounded-lg">
+                      <div className="flex flex-col items-center mb-8">
                         <CapScoreGauge score={result.capScore} />
                       </div>
-                      <div className="p-6 bg-card border border-card-border rounded-lg space-y-4">
-                        <h3 className="text-lg font-semibold">Score Explanation</h3>
-                        <p className="text-muted-foreground">{result.capScoreExplanation}</p>
-                        <div className="h-px bg-border my-4" />
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Unsupported claims</span>
-                            <span className="font-mono text-red-400">
-                              {result.claims.filter(c => c.rating === "unsupported").length}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Framing tactics detected</span>
-                            <span className="font-mono text-amber-400">
-                              {result.framingTactics.reduce((sum, t) => sum + t.count, 0)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">High severity tactics</span>
-                            <span className="font-mono text-red-400">
-                              {result.framingTactics.filter(t => t.severity === "high").length}
-                            </span>
-                          </div>
-                        </div>
+                      <div className="max-w-xl mx-auto">
+                        <h3 className="text-lg font-semibold mb-3 text-center">Score Breakdown</h3>
+                        <p className="text-muted-foreground text-center leading-relaxed">
+                          {result.capScoreExplanation}
+                        </p>
                       </div>
                     </div>
                   </TabsContent>
 
-                  <TabsContent value="framing" className="mt-6">
-                    {result.framingTactics.length > 0 ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {result.framingTactics.map((tactic, index) => (
-                          <FramingCard key={tactic.name} tactic={tactic} index={index} />
-                        ))}
+                  <TabsContent value="framing" className="mt-6 space-y-4">
+                    {result.framingTactics.length === 0 ? (
+                      <div className="text-center py-12 text-muted-foreground">
+                        <p>No significant framing tactics were detected.</p>
                       </div>
                     ) : (
-                      <div className="p-8 bg-card border border-card-border rounded-lg text-center text-muted-foreground">
-                        No significant framing tactics were detected in this content.
-                      </div>
+                      result.framingTactics.map((tactic, index) => (
+                        <FramingCard key={tactic.name} tactic={tactic} index={index} />
+                      ))
                     )}
                   </TabsContent>
                 </Tabs>

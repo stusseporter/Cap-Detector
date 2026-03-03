@@ -1,12 +1,12 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
-import { extractVideoId, fetchTranscript, formatTimestamp } from "./services/youtube";
-import { analyzeTranscript, type AnalysisResult } from "./services/analysis";
-import { transcribeFromYouTube, getVideoMetadata, getCachedTranscript, cacheTranscript } from "./services/transcription";
+import { ingestContent, type ContentType } from "./services/content-ingestion";
+import { analyzeContent, type AnalysisResult } from "./services/analysis";
 
 interface AnalyzeRequest {
   url?: string;
-  manualTranscript?: string;
+  text?: string;
+  contentType: ContentType;
 }
 
 export async function registerRoutes(
@@ -16,22 +16,26 @@ export async function registerRoutes(
 
   app.post("/api/analyze", async (req: Request, res: Response) => {
     try {
-      const { url, manualTranscript } = req.body as AnalyzeRequest;
+      const { url, text, contentType } = req.body as AnalyzeRequest;
 
-      let videoId: string | null = null;
-      
-      if (url) {
-        videoId = extractVideoId(url);
-      }
-
-      if (videoId && !/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
-        videoId = null;
-      }
-
-      if (!videoId && !manualTranscript) {
+      if (!contentType || !['youtube', 'article', 'twitter', 'text'].includes(contentType)) {
         return res.status(400).json({
-          error: "Invalid YouTube URL",
-          message: "Could not extract video ID. Supported formats: youtube.com/watch?v=..., youtu.be/..., youtube.com/shorts/..., youtube.com/embed/..."
+          error: "Invalid content type",
+          message: "Please select a content type: YouTube, Article, Twitter, or Text."
+        });
+      }
+
+      if (contentType !== 'text' && !url) {
+        return res.status(400).json({
+          error: "No URL provided",
+          message: "Please enter a URL to analyze."
+        });
+      }
+
+      if (contentType === 'text' && !text) {
+        return res.status(400).json({
+          error: "No text provided",
+          message: "Please paste some text to analyze."
         });
       }
 
@@ -44,75 +48,38 @@ export async function registerRoutes(
         res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
       };
 
-      let transcriptText: string;
-      let transcriptSegments: { text: string; offset: number; duration: number }[] | null = null;
-      let transcriptSource: 'captions' | 'asr' | 'manual' = 'captions';
+      sendEvent("progress", { message: "Starting content extraction..." });
 
-      if (manualTranscript) {
-        sendEvent("progress", { message: "Using provided transcript..." });
-        transcriptText = manualTranscript;
-        transcriptSource = 'manual';
-      } else {
-        const cachedTranscript = getCachedTranscript(videoId!);
-        if (cachedTranscript) {
-          sendEvent("progress", { message: "Using cached transcript..." });
-          transcriptText = cachedTranscript;
-          transcriptSource = 'asr';
-        } else {
-          sendEvent("progress", { message: "Fetching captions..." });
-          
-          const transcriptResult = await fetchTranscript(videoId!);
-          
-          if (transcriptResult.success && transcriptResult.fullText) {
-            transcriptText = transcriptResult.fullText;
-            transcriptSegments = transcriptResult.transcript!;
-            transcriptSource = 'captions';
-            sendEvent("progress", { message: "Captions fetched successfully" });
-          } else {
-            sendEvent("progress", { message: "No captions found — generating transcript from audio..." });
-            
-            const asrResult = await transcribeFromYouTube(videoId!, (message) => {
-              sendEvent("progress", { message });
-            });
-            
-            if (asrResult.success && asrResult.transcript) {
-              transcriptText = asrResult.transcript;
-              transcriptSource = 'asr';
-              sendEvent("progress", { message: "Audio transcription complete" });
-            } else if (asrResult.tooLong) {
-              sendEvent("transcript_failed", { 
-                message: asrResult.error,
-                requireManual: true,
-                tooLong: true,
-                durationSeconds: asrResult.durationSeconds
-              });
-              res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
-              return res.end();
-            } else {
-              const errorDetail = asrResult.error ? asrResult.error : 'Unknown error occurred during audio transcription.';
-              sendEvent("transcript_failed", { 
-                message: `Automatic transcription failed: ${errorDetail} Please paste the transcript manually.`,
-                requireManual: true
-              });
-              res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
-              return res.end();
-            }
-          }
-        }
+      const content = await ingestContent(
+        { url: url?.trim(), text, contentType },
+        (message) => sendEvent("progress", { message })
+      );
+
+      if (!content.success || !content.text) {
+        sendEvent("content_failed", {
+          message: content.errorFriendly || content.error || 'Failed to extract content.',
+          contentType: content.contentType,
+        });
+        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+        return res.end();
       }
 
       sendEvent("progress", { message: "Analyzing content..." });
 
-      const analysis = await analyzeTranscript(
-        transcriptSegments || transcriptText,
+      const analysis = await analyzeContent(
+        content.text,
+        content.contentType || contentType,
         (message) => sendEvent("progress", { message })
       );
 
       sendEvent("complete", {
-        videoId,
         analysis,
-        transcriptLength: transcriptText.length,
-        transcriptSource
+        contentType: content.contentType,
+        title: content.title,
+        source: content.source,
+        authorName: content.authorName,
+        thumbnailUrl: content.thumbnailUrl,
+        textLength: content.text.length,
       });
 
       res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
@@ -120,14 +87,14 @@ export async function registerRoutes(
 
     } catch (error) {
       console.error("Analysis error:", error);
-      
+
       if (!res.headersSent) {
         return res.status(500).json({
           error: "Analysis failed",
           message: error instanceof Error ? error.message : "Unknown error occurred"
         });
       }
-      
+
       res.write(`data: ${JSON.stringify({ 
         type: "error", 
         message: error instanceof Error ? error.message : "Analysis failed" 
