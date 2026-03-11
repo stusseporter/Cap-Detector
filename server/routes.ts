@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { ingestContent, type ContentType } from "./services/content-ingestion";
 import { analyzeContent, type AnalysisResult } from "./services/analysis";
+import restaurantRouter from "./restaurant/routes";
 
 interface AnalyzeRequest {
   url?: string;
@@ -13,6 +14,8 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Mount restaurant operations API
+  app.use("/api/restaurant", restaurantRouter);
 
   app.post("/api/analyze", async (req: Request, res: Response) => {
     try {
